@@ -21,7 +21,10 @@
     more: '<circle cx="12" cy="5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="19" r="1.2" fill="currentColor"/>',
     list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
     calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>',
-    arrowUpSmall: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    chevronUp: '<path d="M6 15l6-6 6 6"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
   };
 
   function icon(name, size) {

@@ -7,7 +7,7 @@
   <meta name="description" content="Track how your product prices compare with amazon.in, croma.com and flipkart.com." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
@@ -67,15 +67,18 @@
             <div>
               <h2>Products <span class="count" id="productCount"></span></h2>
               <p class="sub">Your tracked products and what to do next</p>
+              <p class="rule" id="ruleNote"></p>
             </div>
           </div>
 
           <div class="toolbar">
             <div class="tabs" role="tablist">
-              <button class="tab active" data-view="cards" role="tab"><span data-icon="grid"></span>Cards</button>
-              <button class="tab" data-view="list" role="tab"><span data-icon="list"></span>List</button>
+              <button class="tab active" data-view="cards" role="tab" aria-selected="true"><span data-icon="grid"></span>Cards</button>
+              <button class="tab" data-view="list" role="tab" aria-selected="false"><span data-icon="list"></span>List</button>
             </div>
             <div class="toolbar-right">
+              <label class="select"><select id="brandFilter" aria-label="Filter by brand"></select><span data-icon="chevronDown"></span></label>
+              <label class="select"><select id="categoryFilter" aria-label="Filter by category"></select><span data-icon="chevronDown"></span></label>
               <label class="search">
                 <span data-icon="search"></span>
                 <input type="search" id="productSearch" placeholder="Search products" />
@@ -95,6 +98,7 @@
             </div>
           </div>
 
+          <div class="active-filters" id="activeFilters"></div>
           <div id="productView"></div>
 
           <div class="products-foot">
@@ -123,10 +127,10 @@
               <thead>
                 <tr>
                   <th><button class="th-sort" id="siteSortBtn">Site <span id="siteSortIcon"></span></button></th>
-                  <th>Products matched</th>
-                  <th class="hide-sm"></th>
+                  <th>Products listed</th>
+                  <th class="num">Out of stock</th>
                   <th class="num">Price changes this week</th>
-                  <th class="num">Index</th>
+                  <th class="num">Index <span class="info" data-icon="info" title="Your price ÷ this site's price × 100, averaged over its in-stock listings. Above 100 = you're pricier."></span></th>
                 </tr>
               </thead>
               <tbody id="siteRows"></tbody>
@@ -139,7 +143,7 @@
           <div class="section-head">
             <div>
               <h2>Historical index <span class="info" data-icon="info" title="Your average price divided by the average competitor price, × 100"></span></h2>
-              <p class="sub">100 = same as the average competitor price</p>
+              <p class="sub">100 = same price as the competitor. Above 100 = you're more expensive</p>
             </div>
           </div>
           <div class="panel chart-panel">
@@ -158,11 +162,13 @@
               <svg id="chart" role="img" aria-label="Historical index by site"></svg>
               <div class="tooltip" id="tooltip" hidden></div>
             </div>
+            <button class="link-btn" id="tableToggle" aria-expanded="false" aria-controls="chartTable"><span data-icon="table"></span>Show data table</button>
+            <div class="chart-table" id="chartTable" hidden></div>
           </div>
         </section>
 
         <footer class="footer">
-          © 2026 [Product] <span>·</span> v1.2 <span>·</span>
+          © 2026 Price Competition Dashboard <span>·</span> v1.2 <span>·</span>
           <a href="#">Help</a> <span>·</span> <a href="#">Privacy</a> <span>·</span> <a href="#">Terms</a>
         </footer>
       </div>

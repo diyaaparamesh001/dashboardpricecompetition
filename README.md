@@ -30,8 +30,30 @@ To publish it, enable **GitHub Pages** for the `main` branch, root folder
 
 ## Data
 
-All numbers come from `js/data.js` (`window.DASHBOARD_DATA`). Replace that file,
-or fill the object from your API before `js/app.js` loads, to show real data.
+Every number on the page is calculated from `js/data.js` (`window.DASHBOARD_DATA`):
+products (price, cost, stock) and each competitor listing (price now, price a week ago,
+stock). Overview counts, price position, site coverage, indices and suggestions all come
+from that one source, so they can't contradict each other. Replace the file, or fill the
+object from your API before `js/app.js` loads.
+
+### Pricing rule
+
+Every suggestion follows one rule, set in `pricing`: price **₹10 below the cheapest in-stock
+competitor**, but never below a **10% margin**. Each suggestion shows the margin before and
+after. Products where the rule can't improve the price show "Hold price" with the reason.
+
+### Price index
+
+Your price ÷ competitor price × 100, averaged per site, then across sites.
+100 = same price; above 100 = you're more expensive.
+
+## Design tokens
+
+`css/styles.css` defines the brand palette and type scale (IBM Plex Sans:
+Display 32 · H1 24 · H2 18 · H3 14 · Body 13 · Small 12 · Caption 11) in `:root`.
+Site colours (teal, mustard, off-white) were chosen from the palette because they
+pass a colour-blind separation check together. Green means below market and
+orange/red means above market everywhere on the page.
 
 | File | Purpose |
 | --- | --- |

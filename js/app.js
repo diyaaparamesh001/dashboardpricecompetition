@@ -2,58 +2,125 @@
   "use strict";
 
   const DATA = window.DASHBOARD_DATA;
+  const RULES = DATA.pricing;
   const { icon, hydrate } = window.Icons;
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
   /* ---------------- Helpers ---------------- */
   const inr = (n) => "₹" + Math.round(n).toLocaleString("en-IN");
+  const pct = (n, d = 1) => n.toFixed(d) + "%";
+  const signed = (n, d = 1) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(d);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const mean = (arr) => arr.reduce((s, v) => s + v, 0) / (arr.length || 1);
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const fmtDate = (d) => d.getDate() + " " + MONTHS[d.getMonth()];
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
   const siteById = Object.fromEntries(DATA.sites.map((s) => [s.id, s]));
+  // Retail-style prices ending in 9.
+  const roundDown9 = (v) => Math.floor((v + 1) / 10) * 10 - 1;
+  const roundUp9 = (v) => Math.ceil((v + 1) / 10) * 10 - 1;
+  const marginAt = (price, cost) => ((price - cost) / price) * 100;
 
+  // Diverging scale: green = below market, neutral = at market, warm = above market.
   const POSITIONS = [
-    { key: "cheapest", label: "Cheapest", color: "var(--pos-1)" },
-    { key: "cheaper", label: "Cheaper than average", color: "var(--pos-2)" },
-    { key: "average", label: "Average", color: "var(--pos-3)" },
-    { key: "pricier", label: "Pricier than average", color: "var(--pos-4)" },
-    { key: "priciest", label: "Priciest", color: "var(--pos-5)" },
+    { key: "cheapest", label: "Cheapest", color: "var(--pos-cheapest)" },
+    { key: "cheaper", label: "Cheaper than average", color: "var(--pos-cheaper)" },
+    { key: "average", label: "Average", color: "var(--pos-average)" },
+    { key: "pricier", label: "Pricier than average", color: "var(--pos-pricier)" },
+    { key: "priciest", label: "Priciest", color: "var(--pos-priciest)" },
   ];
-  const AVERAGE_BAND = 1; // within ±1% of the competitor average counts as "average"
+  const posOf = (key) => POSITIONS.find((p) => p.key === key);
 
-  // Colour for the i-th rung of an n-rung ladder (green → orange).
-  const rungColor = (i, n) => {
-    const idx = n <= 1 ? 0 : Math.round((i / (n - 1)) * (POSITIONS.length - 1));
-    return POSITIONS[idx].color;
-  };
-
+  /* ---------------- Per-product analysis ---------------- */
   function analyze(p) {
-    const comps = Object.entries(p.competitors)
-      .filter(([, price]) => price != null)
-      .map(([site, price]) => ({ site, price }));
-    const ladder = comps.map((c) => ({ ...c, you: false }))
+    const listings = Object.entries(p.competitors).map(([site, c]) => ({ site, ...c }));
+    const live = listings.filter((c) => c.inStock);
+    const ladder = live.map((c) => ({ ...c, you: false }))
       .concat([{ site: "you", price: p.price, you: true }])
       .sort((a, b) => a.price - b.price || (a.you ? -1 : 1));
     const rank = ladder.findIndex((r) => r.you) + 1;
     const total = ladder.length;
-    const avg = comps.reduce((s, c) => s + c.price, 0) / (comps.length || 1);
-    const gapPct = ((p.price - avg) / avg) * 100;
-    const cheaperSites = comps.filter((c) => c.price < p.price).length;
+    const avg = mean(live.map((c) => c.price));
+    const gapPct = live.length ? ((p.price - avg) / avg) * 100 : 0;
+    const index = live.length ? (p.price / avg) * 100 : 100;
+    const cheaperSites = live.filter((c) => c.price < p.price).length;
+    const margin = marginAt(p.price, p.cost);
 
     let position;
-    if (rank === 1) position = "cheapest";
+    if (!live.length || rank === 1) position = "cheapest";
     else if (rank === total) position = "priciest";
-    else if (gapPct < -AVERAGE_BAND) position = "cheaper";
-    else if (gapPct > AVERAGE_BAND) position = "pricier";
+    else if (gapPct < -RULES.averageBand) position = "cheaper";
+    else if (gapPct > RULES.averageBand) position = "pricier";
     else position = "average";
 
     let rankNote;
     if (rank === 1) rankNote = "cheapest";
     else if (rank === total) rankNote = "priciest";
-    else rankNote = cheaperSites + (cheaperSites === 1 ? " site" : " sites") + " cheaper";
+    else rankNote = plural(cheaperSites, "site", "sites") + " cheaper";
 
-    return { comps, ladder, rank, total, avg, gapPct, position, rankNote };
+    // One rule for every product: undercut the cheapest in-stock competitor,
+    // but never go below the margin floor.
+    let suggestion = null;
+    if (live.length) {
+      const cheapest = Math.min(...live.map((c) => c.price));
+      const target = roundDown9(cheapest - RULES.undercut);
+      const floorPrice = roundUp9(p.cost / (1 - RULES.marginFloor / 100));
+      let price = target, capped = false;
+      if (target < floorPrice) { price = floorPrice; capped = true; }
+
+      if (price === p.price) {
+        suggestion = { hold: true, reason: "Already at the suggested price" };
+      } else if (capped && price > p.price) {
+        suggestion = { hold: true, reason: `Can't undercut without dropping below a ${RULES.marginFloor}% margin` };
+      } else {
+        suggestion = { price, capped, up: price > p.price, margin: marginAt(price, p.cost) };
+      }
+    }
+
+    return { listings, live, ladder, rank, total, avg, gapPct, index, position, rankNote, margin, suggestion };
+  }
+
+  /* ---------------- Portfolio-level metrics ---------------- */
+  function metrics() {
+    const total = products.length;
+    const analyses = products.map((p) => ({ p, a: analyze(p) }));
+
+    const sites = DATA.sites.map((s) => {
+      const rows = products.filter((p) => p.competitors[s.id]).map((p) => ({ p, c: p.competitors[s.id] }));
+      const inStock = rows.filter((r) => r.c.inStock);
+      return {
+        ...s,
+        listed: rows.length,
+        outOfStock: rows.length - inStock.length,
+        changes: rows.filter((r) => r.c.prev != null && r.c.prev !== r.c.price).length,
+        index: inStock.length ? mean(inStock.map((r) => (r.p.price / r.c.price) * 100)) : 100,
+      };
+    });
+
+    const allListings = products.flatMap((p) =>
+      Object.entries(p.competitors).map(([site, c]) => ({ p, site, ...c })));
+    const moves = allListings.filter((l) => l.prev != null && l.prev !== l.price);
+    const biggestMove = moves.slice().sort((a, b) => Math.abs(b.price - b.prev) - Math.abs(a.price - a.prev))[0];
+
+    const history = historyFor(7, sites);
+    const avgSeries = history.avg;
+
+    return {
+      total,
+      analyses,
+      sites,
+      brands: new Set(products.map((p) => p.brand)).size,
+      categories: new Set(products.map((p) => p.category)).size,
+      increased: moves.filter((l) => l.price > l.prev).length,
+      decreased: moves.filter((l) => l.price < l.prev).length,
+      biggestMove,
+      myOutOfStock: products.filter((p) => !p.inStock),
+      competitorOutOfStock: allListings.filter((l) => !l.inStock).length,
+      index: avgSeries[avgSeries.length - 1],
+      indexChange: avgSeries[avgSeries.length - 1] - avgSeries[0],
+      weekAvg: avgSeries,
+    };
   }
 
   /* ---------------- State ---------------- */
@@ -61,6 +128,8 @@
   const state = {
     view: "cards",
     query: "",
+    brand: "",
+    category: "",
     sort: "gap",
     showAll: false,
     starred: new Set(),
@@ -71,6 +140,7 @@
     hiddenSeries: new Set(),
   };
   const CARD_LIMIT = 4;
+  let M = null; // current metrics
 
   /* ---------------- Toast ---------------- */
   let toastTimer;
@@ -79,91 +149,105 @@
     el.textContent = msg;
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (el.hidden = true), 2200);
+    toastTimer = setTimeout(() => (el.hidden = true), 2400);
   }
 
   /* ---------------- Header ---------------- */
   function renderHeader() {
-    const brands = new Set(products.map((p) => p.brand)).size;
-    const cats = new Set(products.map((p) => p.category)).size;
     $("#userName").textContent = DATA.user.name;
     $("#lastUpdated").textContent = "Last updated " + DATA.user.lastUpdated;
     $("#headerMeta").innerHTML =
-      `<b>${products.length}</b> products<span class="sep">·</span><b>${brands}</b> brands<span class="sep">·</span><b>${cats}</b> categories`;
+      `<b>${M.total}</b> products<span class="sep">·</span><b>${M.brands}</b> brands<span class="sep">·</span><b>${M.categories}</b> categories`;
   }
 
   /* ---------------- Overview ---------------- */
   function renderOverview() {
-    const o = DATA.overview;
-    const pl = (n, one, many) => n + " " + (n === 1 ? one : many);
-    const row = (ic, label, value) =>
-      `<div class="ov-row"><span class="ico">${icon(ic)}</span><span>${label}</span><span><b>${value.split(" ")[0]}</b> ${value.split(" ").slice(1).join(" ")}</span></div>`;
+    const row = (ic, label, n, unit) =>
+      `<div class="ov-row"><span class="ico">${icon(ic)}</span><span>${label}</span><span><b>${n}</b> ${unit}</span></div>`;
+
+    const bm = M.biggestMove;
+    const bmText = bm
+      ? `Biggest move: ${esc(shortName(bm.p.name))} on ${esc(siteById[bm.site].name)}, ${bm.price > bm.prev ? "+" : "−"}${inr(Math.abs(bm.price - bm.prev))}`
+      : "No competitor price changes this week";
+    const oos = M.myOutOfStock;
+    const oosText = oos.length
+      ? `${esc(shortName(oos[0].name))}${oos.length > 1 ? ` and ${oos.length - 1} more` : ""} out of stock in your store`
+      : "Everything is in stock in your store";
+
+    const up = M.indexChange > 0.05, down = M.indexChange < -0.05;
+    const trendClass = up ? "warn" : down ? "good" : "";
+    const trendWord = up ? "pricier" : down ? "cheaper" : "no change";
+    const idx = Math.round(M.index);
+    const vsAvg = idx === 100 ? "in line with" : `${Math.abs(idx - 100)}% ${idx > 100 ? "above" : "below"}`;
 
     $("#overview").innerHTML = `
       <article class="panel ov-card">
-        <div class="ov-head"><span class="ov-icon">${icon("arrowsUpDown")}</span><h3>Price changes</h3>
-          <a class="ov-link" href="#products" aria-label="Go to products">${icon("arrowRight")}</a></div>
+        <div class="ov-head"><span class="ov-icon">${icon("arrowsUpDown")}</span><h3>Competitor prices</h3>
+          <a class="ov-link" href="#sites" aria-label="Go to sites">${icon("arrowRight")}</a></div>
         <div class="ov-rows">
-          ${row("arrowUp", "Increased", pl(o.priceChanges.increased, "product", "products"))}
-          ${row("arrowDown", "Decreased", pl(o.priceChanges.decreased, "product", "products"))}
+          ${row("arrowUp", "Increased", M.increased, M.increased === 1 ? "listing" : "listings")}
+          ${row("arrowDown", "Decreased", M.decreased, M.decreased === 1 ? "listing" : "listings")}
         </div>
+        <p class="ov-foot">${bmText}</p>
       </article>
       <article class="panel ov-card">
         <div class="ov-head"><span class="ov-icon">${icon("package")}</span><h3>Out of stock</h3>
-          <a class="ov-link" href="#sites" aria-label="Go to sites">${icon("arrowRight")}</a></div>
+          <button class="ov-link" data-filter="oos" aria-label="Show out-of-stock products">${icon("arrowRight")}</button></div>
         <div class="ov-rows">
-          ${row("store", "My store", pl(o.outOfStock.myStore, "product", "products"))}
-          ${row("users", "Competitors", pl(o.outOfStock.competitors, "listing", "listings"))}
+          ${row("store", "My store", oos.length, oos.length === 1 ? "product" : "products")}
+          ${row("users", "Competitors", M.competitorOutOfStock, M.competitorOutOfStock === 1 ? "listing" : "listings")}
         </div>
+        <p class="ov-foot">${oosText}</p>
       </article>
       <article class="panel ov-card">
         <div class="ov-head"><span class="ov-icon">${icon("chart")}</span>
-          <h3>Index <span class="info" title="Your average price vs. the average competitor price (100 = same)">${icon("info")}</span></h3>
+          <h3>Price index <span class="info" title="Your price ÷ the competitor's price × 100, averaged over each site's listings, then across the ${M.sites.length} sites. 100 = same price. Above 100 = you're more expensive.">${icon("info")}</span></h3>
           <a class="ov-link" href="#history" aria-label="Go to historical index">${icon("arrowRight")}</a></div>
         <div class="ov-index">
           <div>
-            <div class="big">${o.index.value}</div>
-            <div class="note">${icon(o.index.change >= 0 ? "arrowUp" : "arrowDown")}<b>${Math.abs(o.index.change)}</b>&nbsp;this week · avg. of ${DATA.sites.length} sites</div>
+            <div class="display">${idx}</div>
+            <div class="trend ${trendClass}">${icon(up ? "arrowUp" : down ? "arrowDown" : "arrowRight")}<b>${signed(M.indexChange)} pts</b>&nbsp;this week (${trendWord})</div>
           </div>
-          <svg class="sparkline" id="sparkline" preserveAspectRatio="none"></svg>
+          <svg class="sparkline" id="sparkline" preserveAspectRatio="none" aria-hidden="true"></svg>
         </div>
+        <p class="ov-foot">You're ${vsAvg} the average competitor price</p>
       </article>`;
     drawSparkline();
   }
 
+  const shortName = (n) => n.split(/[,(]/)[0].replace(/ with .*/, "");
+
   function drawSparkline() {
     const svg = $("#sparkline");
     if (!svg) return;
-    const w = svg.clientWidth || 300, h = svg.clientHeight || 40;
-    const week = DATA.history.week;
-    const ids = Object.keys(week);
-    const n = week[ids[0]].length;
-    const avg = Array.from({ length: n }, (_, i) => ids.reduce((s, id) => s + week[id][i], 0) / ids.length);
-    // Upsample a little so the line reads as a gentle wave like the design.
+    const w = svg.clientWidth || 300, h = svg.clientHeight || 44;
+    const avg = M.weekAvg, n = avg.length;
     const min = Math.min(...avg) - 0.6, max = Math.max(...avg) + 0.6;
-    const pts = avg.map((v, i) => [(i / (n - 1)) * w, h - 4 - ((v - min) / (max - min)) * (h - 8)]);
+    const pts = avg.map((v, i) => [(i / (n - 1)) * (w - 4) + 2, h - 4 - ((v - min) / (max - min)) * (h - 8)]);
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    svg.innerHTML = `<path d="${smoothPath(pts)}" fill="none" stroke="#f2f2f2" stroke-width="1.4" stroke-linecap="round"/>`;
+    svg.innerHTML = `<path d="${smoothPath(pts)}" fill="none" stroke="var(--text)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="${pts[n - 1][0]}" cy="${pts[n - 1][1]}" r="3" fill="var(--text)"/>`;
   }
 
   /* ---------------- Price position ---------------- */
   function renderPosition() {
-    const siteNames = DATA.sites.map((s) => s.name);
+    const names = DATA.sites.map((s) => s.name);
     $("#positionSub").textContent =
-      `Where your ${products.length} products sit against ${siteNames.slice(0, -1).join(", ")} and ${siteNames.slice(-1)}`;
+      `Where your ${M.total} products sit against ${names.slice(0, -1).join(", ")} and ${names.slice(-1)} (in-stock listings only)`;
 
     const groups = Object.fromEntries(POSITIONS.map((p) => [p.key, []]));
-    products.forEach((p) => groups[analyze(p).position].push(p));
+    M.analyses.forEach(({ p, a }) => groups[a.position].push(p));
     const visible = POSITIONS.filter((p) => groups[p.key].length);
 
     const bar = visible.map((p) =>
       `<span data-key="${p.key}" style="flex:${groups[p.key].length};background:${p.color}"></span>`).join("");
     const labels = visible.map((p) =>
-      `<div class="pos-item" data-key="${p.key}" style="flex:${groups[p.key].length}" title="${esc(groups[p.key].map((x) => x.name).join("\n"))}">
-         <div class="n">${groups[p.key].length}</div><div class="l">${p.label}</div></div>`).join("");
+      `<button class="pos-item" data-key="${p.key}" style="flex:${groups[p.key].length}" title="${esc(groups[p.key].map((x) => x.name).join("\n"))}">
+         <span class="n">${groups[p.key].length}</span><span class="l"><i style="background:${p.color}"></i>${p.label}</span></button>`).join("");
 
     const el = $("#position");
-    el.innerHTML = `<div class="pos-bar">${bar}</div><div class="pos-labels">${labels}</div>`;
+    el.innerHTML = `<div class="pos-scale"><span>${icon("arrowLeft")}Below market</span><span>Above market${icon("arrowRight")}</span></div>
+      <div class="pos-bar">${bar}</div><div class="pos-labels">${labels}</div>`;
     $$(".pos-item", el).forEach((item) => {
       item.addEventListener("mouseenter", () => {
         el.classList.add("hovering");
@@ -173,95 +257,153 @@
         el.classList.remove("hovering");
         $$(".pos-bar span", el).forEach((s) => s.classList.remove("hl"));
       });
+      item.addEventListener("click", () => {
+        state.query = "";
+        $("#productSearch").value = "";
+        state.position = state.position === item.dataset.key ? "" : item.dataset.key;
+        state.showAll = true;
+        renderProducts();
+        $("#products").scrollIntoView({ behavior: "smooth" });
+      });
     });
   }
 
   /* ---------------- Products ---------------- */
+  function filterOptions() {
+    const fill = (sel, values, label) => {
+      const cur = sel.value;
+      sel.innerHTML = `<option value="">All ${label}</option>` + values.map((v) => `<option>${esc(v)}</option>`).join("");
+      sel.value = cur;
+    };
+    fill($("#brandFilter"), [...new Set(products.map((p) => p.brand))].sort(), "brands");
+    fill($("#categoryFilter"), [...new Set(products.map((p) => p.category))].sort(), "categories");
+  }
+
   function sortedFilteredProducts() {
     const q = state.query.trim().toLowerCase();
-    let list = products.map((p) => ({ p, a: analyze(p) }));
-    if (q) {
-      list = list.filter(({ p }) =>
-        [p.name, p.brand, p.category, String(p.id)].some((v) => v.toLowerCase().includes(q)));
-    }
+    let list = M.analyses.slice();
+    if (q) list = list.filter(({ p }) => [p.name, p.brand, p.category, String(p.id)].some((v) => v.toLowerCase().includes(q)));
+    if (state.brand) list = list.filter(({ p }) => p.brand === state.brand);
+    if (state.category) list = list.filter(({ p }) => p.category === state.category);
+    if (state.position) list = list.filter(({ a }) => a.position === state.position);
+    if (state.oos) list = list.filter(({ p }) => !p.inStock);
     const sorters = {
       gap: (x, y) => Math.abs(y.a.gapPct) - Math.abs(x.a.gapPct),
       rank: (x, y) => x.a.rank - y.a.rank || x.p.name.localeCompare(y.p.name),
       name: (x, y) => x.p.name.localeCompare(y.p.name),
       priceAsc: (x, y) => x.p.price - y.p.price,
       priceDesc: (x, y) => y.p.price - x.p.price,
-      margin: (x, y) => y.p.margin - x.p.margin,
+      margin: (x, y) => y.a.margin - x.a.margin,
     };
-    // Starred products always float to the top.
-    list.sort((x, y) =>
-      (state.starred.has(y.p.id) - state.starred.has(x.p.id)) || sorters[state.sort](x, y));
+    // Starred products float to the top.
+    list.sort((x, y) => (state.starred.has(y.p.id) - state.starred.has(x.p.id)) || sorters[state.sort](x, y));
     return list;
   }
 
-  function actionButton(p) {
-    if (p.suggestion == null || p.suggestion === p.price) {
-      return `<button class="btn done" disabled>${icon("arrowRight")}Price set</button>`;
+  function actionBlock(p, a, compact) {
+    const s = a.suggestion;
+    if (!s) return `<span class="muted">No in-stock competitors</span>`;
+    if (s.hold) {
+      return `<span class="hold" title="${esc(s.reason)}">${icon("check")}Hold price</span>`;
     }
-    const up = p.suggestion > p.price;
-    return `<button class="btn" data-action="apply" data-id="${p.id}">${up ? "Raise" : "Lower"} to ${inr(p.suggestion)} ${icon(up ? "arrowUp" : "arrowDown")}</button>`;
+    const delta = s.margin - a.margin;
+    const marginNote = `<span class="margin-note ${s.capped ? "warn" : ""}" title="${s.capped ? `Limited by the ${RULES.marginFloor}% margin floor` : ""}">
+        Margin ${pct(a.margin)} → <b>${pct(s.margin)}</b>${s.capped ? " (floor)" : ""}</span>`;
+    const btn = `<button class="btn" data-action="apply" data-id="${p.id}" title="Margin changes by ${signed(delta)} pts">
+        ${s.up ? "Raise" : "Lower"} to ${inr(s.price)} ${icon(s.up ? "arrowUp" : "arrowDown")}</button>`;
+    return compact ? `<div class="action-stack">${btn}${marginNote}</div>` : `<div class="action">${marginNote}${btn}</div>`;
   }
 
-  function competitorList(a) {
-    return `<div class="comp-list">${a.comps
-      .slice().sort((x, y) => x.price - y.price)
-      .map((c) => {
-        const s = siteById[c.site] || { name: c.site, color: "#888" };
-        return `<div><span class="site-name"><i class="swatch" style="background:${s.color}"></i>${esc(s.name)}</span><b>${inr(c.price)}</b></div>`;
-      }).join("")}</div>`;
+  // Place ladder points by actual price, then nudge apart so labels don't collide.
+  function ladderPositions(points) {
+    const prices = points.map((r) => r.price);
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    const raw = points.map((r) => (hi === lo ? 50 : ((r.price - lo) / (hi - lo)) * 100));
+    const MIN = 15; // % minimum distance between points
+    const pos = raw.slice();
+    for (let pass = 0; pass < 20; pass++) {
+      for (let i = 1; i < pos.length; i++) {
+        const gap = pos[i] - pos[i - 1];
+        if (gap < MIN) { const push = (MIN - gap) / 2; pos[i - 1] -= push; pos[i] += push; }
+      }
+      const shift = Math.min(0, pos[0]); // keep inside [0, 100]
+      for (let i = 0; i < pos.length; i++) pos[i] -= shift;
+      const over = Math.max(0, pos[pos.length - 1] - 100);
+      for (let i = 0; i < pos.length; i++) pos[i] -= over;
+    }
+    return pos;
   }
 
   function productCard({ p, a }) {
-    const rungs = a.ladder.map((r, i) => {
+    // Show every listing on the ladder; out-of-stock ones are hollow and unranked.
+    const points = a.listings.map((c) => ({ ...c, you: false }))
+      .concat([{ site: "you", price: p.price, you: true, inStock: p.inStock }])
+      .sort((x, y) => x.price - y.price || (x.you ? -1 : 1));
+    const pos = ladderPositions(points);
+    const rungs = points.map((r, i) => {
+      const s = siteById[r.site];
+      const label = r.you ? "You" : s.name.split(".")[0];
       const dot = r.you
-        ? `<div class="dot you">You</div>`
-        : `<div class="dot" style="color:${rungColor(i, a.total)}"><span>${i + 1}</span></div>`;
-      const title = r.you ? "Your store" : (siteById[r.site] || {}).name;
-      return `<div class="rung${r.you ? " is-you" : ""}" title="${esc(title)}">${dot}<div class="price">${inr(r.price)}</div></div>`;
+        ? `<span class="dot you">You</span>`
+        : `<span class="dot${r.inStock ? "" : " oos"}" style="--c:${s.color}">${esc(s.initial)}</span>`;
+      const title = r.you ? `Your store: ${inr(r.price)}${p.inStock ? "" : " (out of stock)"}` : `${s.name}: ${inr(r.price)}${r.inStock ? "" : " (out of stock)"}`;
+      return `<div class="rung${r.you ? " is-you" : ""}${r.inStock ? "" : " is-oos"}" style="left:${pos[i]}%" title="${esc(title)}">
+        ${dot}<span class="price">${inr(r.price)}</span><span class="site">${r.inStock ? esc(label) : "out of stock"}</span></div>`;
     }).join("");
+
     const starred = state.starred.has(p.id);
     const expanded = state.expanded.has(p.id);
+    const pos0 = posOf(a.position);
+    const gapCls = a.gapPct > RULES.averageBand ? "warn" : a.gapPct < -RULES.averageBand ? "good" : "";
 
     return `
       <article class="panel p-card">
         <div class="p-top">
-          <div class="thumb" aria-hidden="true"></div>
+          <div class="thumb" aria-hidden="true">${esc(initials(p.name))}</div>
           <div class="p-info">
             <h3 class="p-name" title="${esc(p.name)}">${esc(p.name)}</h3>
-            <p class="p-sub"><b>${inr(p.price)}</b> · margin ${p.margin}% · SKU ${p.id}</p>
+            <p class="p-sub"><b>${inr(p.price)}</b> · margin ${pct(a.margin)} · SKU ${p.id}${p.inStock ? "" : ` · <span class="tag">Out of stock</span>`}</p>
           </div>
           <div class="p-actions">
             <button class="icon-btn${starred ? " starred" : ""}" data-action="star" data-id="${p.id}" aria-label="${starred ? "Unstar" : "Star"} product" aria-pressed="${starred}">${icon("star")}</button>
             <button class="icon-btn" data-action="menu" data-id="${p.id}" aria-label="More actions">${icon("more")}</button>
           </div>
         </div>
-        <p class="p-rank"><b>#${a.rank} of ${a.total}</b> · ${a.rankNote}</p>
-        <div class="ladder"><div class="ladder-track"></div><div class="ladder-row">${rungs}</div></div>
+        <p class="p-rank"><span class="pill"><i style="background:${pos0.color}"></i>${pos0.label}</span>
+          <span><b>#${a.rank} of ${a.total}</b> · ${a.rankNote} · <span class="${gapCls}">${signed(a.gapPct)}% vs avg</span></span></p>
+        <div class="ladder"><div class="ladder-track"></div>${rungs}</div>
         <div class="p-foot">
-          <button class="comp-toggle" data-action="expand" data-id="${p.id}" aria-expanded="${expanded}">Competition (${a.comps.length})</button>
-          ${actionButton(p)}
+          <button class="comp-toggle" data-action="expand" data-id="${p.id}" aria-expanded="${expanded}">
+            Competition (${a.live.length})${a.listings.length > a.live.length ? ` · ${a.listings.length - a.live.length} out of stock` : ""} ${icon(expanded ? "chevronUp" : "chevronDown")}</button>
+          ${actionBlock(p, a)}
         </div>
         ${expanded ? competitorList(a) : ""}
       </article>`;
   }
 
+  const initials = (name) => name.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+
+  function competitorList(a) {
+    return `<div class="comp-list">${a.listings.slice().sort((x, y) => x.price - y.price).map((c) => {
+      const s = siteById[c.site];
+      const move = c.prev != null && c.prev !== c.price
+        ? `<span class="${c.price > c.prev ? "warn" : "good"}">${c.price > c.prev ? "+" : "−"}${inr(Math.abs(c.price - c.prev))} this week</span>` : `<span class="muted">no change</span>`;
+      return `<div><span class="site-name"><i class="swatch" style="background:${s.color}"></i>${esc(s.name)}${c.inStock ? "" : ` <span class="tag">Out of stock</span>`}</span>
+        ${move}<b>${inr(c.price)}</b></div>`;
+    }).join("")}</div>`;
+  }
+
   function productRow({ p, a }) {
-    const pos = POSITIONS.find((x) => x.key === a.position);
-    const cheapest = Math.min(...a.comps.map((c) => c.price));
+    const pos = posOf(a.position);
     return `
       <tr>
-        <td><div class="prod"><div class="thumb"></div><div><b>${esc(p.name)}</b><small>SKU ${p.id} · ${esc(p.brand)}</small></div></div></td>
+        <td><div class="prod"><div class="thumb">${esc(initials(p.name))}</div><div><b>${esc(p.name)}</b><small>SKU ${p.id} · ${esc(p.brand)}${p.inStock ? "" : " · out of stock"}</small></div></div></td>
         <td class="num"><b>${inr(p.price)}</b></td>
-        <td class="num">${p.margin}%</td>
         <td>#${a.rank} of ${a.total}</td>
         <td><span class="pill"><i style="background:${pos.color}"></i>${pos.label}</span></td>
-        <td class="num">${inr(cheapest)}</td>
-        <td class="num">${inr(a.avg)}</td>
-        <td class="num">${actionButton(p)}</td>
+        <td class="num">${a.live.length ? inr(Math.min(...a.live.map((c) => c.price))) : "—"}</td>
+        <td class="num">${a.live.length ? inr(a.avg) : "—"}</td>
+        <td class="num">${actionBlock(p, a, true)}</td>
       </tr>`;
   }
 
@@ -269,17 +411,23 @@
     const list = sortedFilteredProducts();
     const shown = state.showAll ? list : list.slice(0, CARD_LIMIT);
     const view = $("#productView");
-    $("#productCount").textContent = products.length;
+    $("#productCount").textContent = M.total;
+
+    const chips = [];
+    if (state.position) chips.push({ key: "position", label: posOf(state.position).label });
+    if (state.oos) chips.push({ key: "oos", label: "Out of stock in my store" });
+    $("#activeFilters").innerHTML = chips.map((c) =>
+      `<button class="chip" data-clear="${c.key}">${esc(c.label)} ${icon("x")}</button>`).join("");
 
     if (!list.length) {
-      view.innerHTML = `<div class="panel empty">No products match “${esc(state.query)}”.</div>`;
+      view.innerHTML = `<div class="panel empty">No products match these filters.</div>`;
     } else if (state.view === "cards") {
       view.innerHTML = `<div class="cards">${shown.map(productCard).join("")}</div>`;
     } else {
       view.innerHTML = `
         <div class="panel list-panel"><table class="table list-table">
-          <thead><tr><th>Product</th><th class="num">Your price</th><th class="num">Margin</th><th>Rank</th><th>Position</th>
-          <th class="num">Cheapest rival</th><th class="num">Avg. rival</th><th class="num">Next step</th></tr></thead>
+          <thead><tr><th>Product</th><th class="num">Your price</th><th>Rank</th><th>Position</th>
+          <th class="num">Cheapest rival</th><th class="num">Avg. rival</th><th class="num">Suggestion</th></tr></thead>
           <tbody>${shown.map(productRow).join("")}</tbody></table></div>`;
     }
 
@@ -296,10 +444,8 @@
     closeMenu();
     const changed = p.price !== p.originalPrice;
     const menu = document.createElement("div");
-    menu.className = "panel";
-    menu.style.cssText = "position:absolute;z-index:20;padding:4px;min-width:170px;box-shadow:0 10px 30px rgba(0,0,0,.5)";
-    const item = (act, label, disabled) =>
-      `<button data-menu="${act}" ${disabled ? "disabled" : ""} style="display:block;width:100%;text-align:left;border:0;background:none;padding:7px 10px;border-radius:6px;font-size:10.5px;color:${disabled ? "var(--faint)" : "var(--text)"}">${label}</button>`;
+    menu.className = "panel menu";
+    const item = (act, label, disabled) => `<button data-menu="${act}" ${disabled ? "disabled" : ""}>${label}</button>`;
     menu.innerHTML =
       item("competitors", state.expanded.has(p.id) ? "Hide competitor prices" : "Show competitor prices") +
       item("copy", "Copy SKU") +
@@ -308,7 +454,6 @@
     const r = btn.getBoundingClientRect();
     menu.style.top = window.scrollY + r.bottom + 6 + "px";
     menu.style.left = Math.max(8, window.scrollX + r.right - menu.offsetWidth) + "px";
-    menu.addEventListener("mouseover", (e) => { const b = e.target.closest("button:not([disabled])"); $$("button", menu).forEach((x) => (x.style.background = x === b ? "#262626" : "none")); });
     menu.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-menu]");
       if (!b || b.disabled) return;
@@ -319,8 +464,8 @@
       }
       if (b.dataset.menu === "undo") {
         p.price = p.originalPrice;
-        toast(p.name + " reset to " + inr(p.price));
-        renderAllProductViews();
+        toast(`${p.name} reset to ${inr(p.price)}`);
+        renderAll();
       }
       closeMenu();
     });
@@ -332,23 +477,32 @@
     renderProducts();
   }
 
-  function renderAllProductViews() {
-    renderPosition();
-    renderProducts();
-  }
-
   function bindProducts() {
     $$(".tab").forEach((t) => t.addEventListener("click", () => {
-      $$(".tab").forEach((x) => x.classList.toggle("active", x === t));
+      $$(".tab").forEach((x) => { x.classList.toggle("active", x === t); x.setAttribute("aria-selected", x === t); });
       state.view = t.dataset.view;
       renderProducts();
     }));
     $("#productSearch").addEventListener("input", (e) => { state.query = e.target.value; renderProducts(); });
     $("#productSort").addEventListener("change", (e) => { state.sort = e.target.value; renderProducts(); });
+    $("#brandFilter").addEventListener("change", (e) => { state.brand = e.target.value; renderProducts(); });
+    $("#categoryFilter").addEventListener("change", (e) => { state.category = e.target.value; renderProducts(); });
     $("#toggleAll").addEventListener("click", () => {
       state.showAll = !state.showAll;
       renderProducts();
       if (!state.showAll) $("#products").scrollIntoView({ behavior: "smooth" });
+    });
+    $("#activeFilters").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-clear]");
+      if (!b) return;
+      state[b.dataset.clear] = b.dataset.clear === "oos" ? false : "";
+      renderProducts();
+    });
+    $("#overview").addEventListener("click", (e) => {
+      if (!e.target.closest('[data-filter="oos"]')) return;
+      state.oos = true; state.showAll = true;
+      renderProducts();
+      $("#products").scrollIntoView({ behavior: "smooth" });
     });
 
     $("#productView").addEventListener("click", (e) => {
@@ -369,10 +523,12 @@
           openMenu ? closeMenu() : showMenu(btn, p);
           break;
         case "apply": {
+          const a = analyze(p);
+          if (!a.suggestion || a.suggestion.hold) return;
           const from = p.price;
-          p.price = p.suggestion;
-          toast(`${p.name}: ${inr(from)} → ${inr(p.price)}`);
-          renderAllProductViews();
+          p.price = a.suggestion.price;
+          toast(`${shortName(p.name)}: ${inr(from)} → ${inr(p.price)} · margin ${pct(a.suggestion.margin)}`);
+          renderAll();
           break;
         }
       }
@@ -383,15 +539,13 @@
 
   /* ---------------- Sites ---------------- */
   function renderSites() {
-    const total = products.length;
-    const sites = DATA.sites;
+    const sites = M.sites;
     $("#siteCount").textContent = sites.length;
 
-    const avgMatch = Math.round(sites.reduce((s, x) => s + x.matched / total, 0) / sites.length * 100);
-    const listings = sites.reduce((s, x) => s + x.matched, 0);
-    const avgIndex = Math.round(sites.reduce((s, x) => s + x.index, 0) / sites.length);
+    const avgMatch = Math.round(mean(sites.map((s) => s.listed / M.total)) * 100);
+    const listings = sites.reduce((s, x) => s + x.listed, 0);
     $("#siteStats").innerHTML =
-      `<span>Avg. match<b>${avgMatch}%</b></span><span>Listings<b>${listings}</b></span><span>Avg. index<b>${avgIndex}</b></span>`;
+      `<span>Avg. coverage<b>${avgMatch}%</b></span><span>Listings<b>${listings}</b></span><span>Avg. index<b>${Math.round(M.index)}</b></span>`;
 
     const q = state.siteQuery.trim().toLowerCase();
     const rows = sites
@@ -400,15 +554,18 @@
 
     $("#siteSortIcon").innerHTML = icon(state.siteSortAsc ? "arrowUp" : "arrowDown");
     $("#siteRows").innerHTML = rows.length ? rows.map((s) => {
-      const pct = Math.round((s.matched / total) * 100);
+      const share = (s.listed / M.total) * 100;
+      const idx = Math.round(s.index);
+      const cls = idx > 100 ? "warn" : idx < 100 ? "good" : "";
       return `<tr>
-        <td><div class="site-cell"><span class="site-badge" style="color:${s.color}">${esc(s.initial)}</span>${esc(s.name)}</div></td>
-        <td class="matched"><b>${s.matched}</b> <span>of ${total}</span></td>
-        <td class="bar-cell hide-sm"><div class="wrap"><div class="bar"><i style="width:${pct}%"></i></div><span class="pct">${pct}%</span></div></td>
-        <td class="num">${s.priceChanges}</td>
-        <td class="num">${s.index}</td>
+        <td><div class="site-cell"><span class="site-badge" style="--c:${s.color}">${esc(s.initial)}</span>${esc(s.name)}</div></td>
+        <td><div class="cover"><span class="matched"><b>${s.listed}</b> of ${M.total}</span>
+          <span class="bar" role="img" aria-label="${Math.round(share)}% of your catalogue"><i style="width:${share}%"></i></span></div></td>
+        <td class="num">${s.outOfStock}</td>
+        <td class="num">${s.changes}</td>
+        <td class="num"><b>${idx}</b> <span class="idx-note ${cls}">${idx === 100 ? "same" : idx > 100 ? "you're pricier" : "you're cheaper"}</span></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="5" class="muted" style="text-align:center">No sites match “${esc(state.siteQuery)}”.</td></tr>`;
+    }).join("") : `<tr><td colspan="5" class="muted center">No sites match “${esc(state.siteQuery)}”.</td></tr>`;
   }
 
   function bindSites() {
@@ -417,7 +574,6 @@
   }
 
   /* ---------------- Historical chart ---------------- */
-  // Deterministic pseudo-random generator so longer ranges look the same on every load.
   function rng(seed) {
     let t = seed >>> 0;
     return () => {
@@ -428,22 +584,26 @@
     };
   }
 
-  function seriesFor(days) {
+  // Each site's line is shifted so its last point equals today's computed index.
+  function historyFor(days, sites) {
     const week = DATA.history.week;
     const out = {};
-    Object.keys(week).forEach((id, k) => {
-      const base = week[id].slice(-days);
-      if (days <= base.length) { out[id] = base; return; }
+    sites.forEach((s, k) => {
+      const shape = week[s.id] || Array(7).fill(100);
+      const offset = s.index - shape[shape.length - 1];
+      const shifted = shape.map((v) => v + offset);
+      if (days <= shifted.length) { out[s.id] = shifted.slice(-days); return; }
       const rand = rng(1000 + k * 97 + days);
-      const mean = week[id].reduce((s, v) => s + v, 0) / week[id].length - 1.2;
+      const target = mean(shifted) - 1.2;
       const back = [];
-      let v = week[id][0];
-      for (let i = 0; i < days - week[id].length; i++) {
-        v += (rand() - 0.5) * 2.2 + (mean - v) * 0.12;
-        back.unshift(+v.toFixed(2));
+      let v = shifted[0];
+      for (let i = 0; i < days - shifted.length; i++) {
+        v += (rand() - 0.5) * 2.2 + (target - v) * 0.12;
+        back.unshift(v);
       }
-      out[id] = back.concat(week[id]);
+      out[s.id] = back.concat(shifted);
     });
+    out.avg = Array.from({ length: days }, (_, i) => mean(sites.map((s) => out[s.id][i])));
     return out;
   }
 
@@ -492,27 +652,31 @@
   function renderChart() {
     const svg = $("#chart");
     const W = svg.clientWidth || 900;
-    const H = svg.clientHeight || 270;
-    const pad = { l: 34, r: 46, t: 10, b: 30 };
+    const H = svg.clientHeight || 280;
+    const narrow = W < 520;
+    const pad = { l: 34, r: narrow ? 40 : 110, t: 12, b: 30 };
     const days = state.range;
-    const data = seriesFor(days);
+    const data = historyFor(days, M.sites);
     const dates = datesFor(days);
-    const visible = DATA.sites.filter((s) => !state.hiddenSeries.has(s.id));
+    const visible = M.sites.filter((s) => !state.hiddenSeries.has(s.id));
 
-    const values = (visible.length ? visible : DATA.sites).flatMap((s) => data[s.id]);
-    let lo = Math.floor((Math.min(...values) - 1) / 4) * 4;
-    let hi = Math.ceil((Math.max(...values) + 1) / 4) * 4;
-    lo = Math.min(lo, 96); hi = Math.max(hi, 112);
-    const step = (hi - lo) / 4 > 4 ? Math.ceil((hi - lo) / 16) * 4 : 4;
+    const values = (visible.length ? visible : M.sites).flatMap((s) => data[s.id]).concat([100]);
+    const lo = Math.floor((Math.min(...values) - 1) / 4) * 4;
+    const hi = Math.ceil((Math.max(...values) + 1) / 4) * 4;
+    const step = Math.max(4, Math.ceil((hi - lo) / 5 / 2) * 2);
     const x = (i) => pad.l + (i / (days - 1)) * (W - pad.l - pad.r);
     const y = (v) => pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b);
 
     let out = "";
     for (let v = lo; v <= hi; v += step) {
-      out += `<line class="grid" x1="${pad.l}" x2="${W - pad.r + 10}" y1="${y(v)}" y2="${y(v)}"/>`;
+      if (v !== 100) out += `<line class="grid" x1="${pad.l}" x2="${x(days - 1)}" y1="${y(v)}" y2="${y(v)}"/>`;
       out += `<text class="axis" x="${pad.l - 10}" y="${y(v) + 3}" text-anchor="end">${v}</text>`;
     }
-    const maxLabels = W < 500 ? 4 : 7;
+    // Reference line: 100 = same as the average competitor.
+    out += `<line class="baseline" x1="${pad.l}" x2="${x(days - 1)}" y1="${y(100)}" y2="${y(100)}"/>`;
+    out += `<text class="axis strong" x="${pad.l - 10}" y="${y(100) + 3}" text-anchor="end">100</text>`;
+
+    const maxLabels = narrow ? 4 : 7;
     const every = Math.max(1, Math.ceil((days - 1) / (maxLabels - 1)));
     for (let i = days - 1; i >= 0; i -= every) {
       out += `<text class="axis" x="${x(i)}" y="${H - 8}" text-anchor="middle">${fmtDate(dates[i])}</text>`;
@@ -523,26 +687,28 @@
       out += `<path class="series" d="${smoothPath(pts)}" stroke="${s.color}"/>`;
     });
 
-    // End labels, nudged apart so they never overlap.
-    const ends = visible.map((s) => {
-      const v = data[s.id][days - 1];
-      return { s, v, cy: y(v), ly: y(v) };
-    }).sort((a, b) => a.ly - b.ly);
-    for (let i = 1; i < ends.length; i++) {
-      if (ends[i].ly - ends[i - 1].ly < 11) ends[i].ly = ends[i - 1].ly + 11;
-    }
+    // Direct labels at the line ends (text in text colours, the dot carries identity).
+    const ends = visible.map((s) => ({ s, v: data[s.id][days - 1], cy: y(data[s.id][days - 1]) }))
+      .map((e) => ({ ...e, ly: e.cy })).sort((a, b) => a.ly - b.ly);
+    for (let i = 1; i < ends.length; i++) if (ends[i].ly - ends[i - 1].ly < 14) ends[i].ly = ends[i - 1].ly + 14;
     ends.forEach((e) => {
-      out += `<circle cx="${x(days - 1)}" cy="${e.cy}" r="3" fill="${e.s.color}"/>`;
-      out += `<text class="end-label" x="${x(days - 1) + 7}" y="${e.ly + 3}" fill="${e.s.color}">${Math.round(e.v)}</text>`;
+      out += `<circle cx="${x(days - 1)}" cy="${e.cy}" r="4" fill="${e.s.color}" stroke="var(--panel)" stroke-width="2"/>`;
+      out += `<text class="end-label" x="${x(days - 1) + 10}" y="${e.ly + 4}"><tspan class="v">${Math.round(e.v)}</tspan>${narrow ? "" : `<tspan class="n" dx="6">${esc(e.s.name)}</tspan>`}</text>`;
     });
 
-    out += `<g id="hover" style="display:none"><line class="hover-line" y1="${pad.t}" y2="${H - pad.b}"/>${visible.map((s) => `<circle r="3.5" fill="${s.color}" stroke="#191919" stroke-width="2" data-s="${s.id}"/>`).join("")}</g>`;
-    out += `<rect id="hit" x="${pad.l}" y="0" width="${W - pad.l - pad.r}" height="${H}" fill="transparent"/>`;
+    out += `<g id="hover" style="display:none"><line class="hover-line" y1="${pad.t}" y2="${H - pad.b}"/>${visible.map((s) => `<circle r="4" fill="${s.color}" stroke="var(--panel)" stroke-width="2" data-s="${s.id}"/>`).join("")}</g>`;
+    out += `<rect id="hit" x="${pad.l - 10}" y="0" width="${W - pad.l - pad.r + 20}" height="${H}" fill="transparent"/>`;
 
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     svg.innerHTML = out;
     chartModel = { x, y, data, dates, visible, days, W, pad };
     bindChartHover();
+    renderChartTable(data, dates, days);
+  }
+
+  function renderChartTable(data, dates, days) {
+    $("#chartTable").innerHTML = `<table class="table"><thead><tr><th>Date</th>${M.sites.map((s) => `<th class="num">${esc(s.name)}</th>`).join("")}</tr></thead>
+      <tbody>${dates.map((d, i) => `<tr><td>${fmtDate(d)}</td>${M.sites.map((s) => `<td class="num">${data[s.id][i].toFixed(1)}</td>`).join("")}</tr>`).reverse().join("")}</tbody></table>`;
   }
 
   function bindChartHover() {
@@ -553,10 +719,10 @@
     const { x, y, data, dates, visible, days, W, pad } = chartModel;
 
     const move = (clientX) => {
+      if (!visible.length) return;
       const r = svg.getBoundingClientRect();
       const px = ((clientX - r.left) / r.width) * W;
       const i = Math.max(0, Math.min(days - 1, Math.round(((px - pad.l) / (W - pad.l - pad.r)) * (days - 1))));
-      if (!visible.length) return;
       g.style.display = "";
       const line = $("line", g);
       line.setAttribute("x1", x(i)); line.setAttribute("x2", x(i));
@@ -569,7 +735,7 @@
       const left = (x(i) / W) * r.width;
       const tipW = tip.offsetWidth;
       tip.style.left = (left + 14 + tipW > r.width ? left - tipW - 14 : left + 14) + "px";
-      tip.style.top = "10px";
+      tip.style.top = "8px";
     };
     const leave = () => { g.style.display = "none"; tip.hidden = true; };
 
@@ -597,28 +763,44 @@
       renderChart();
     });
     $("#customDates").addEventListener("click", () => toast("Custom date ranges are coming soon"));
+    $("#tableToggle").addEventListener("click", (e) => {
+      const t = $("#chartTable");
+      t.hidden = !t.hidden;
+      e.currentTarget.setAttribute("aria-expanded", !t.hidden);
+      e.currentTarget.lastChild.textContent = t.hidden ? "Show data table" : "Hide data table";
+    });
   }
 
   /* ---------------- Sidebar ---------------- */
   function bindSidebar() {
     $("#sidebarToggle").addEventListener("click", () => $("#app").classList.toggle("collapsed"));
     $$(".side-nav .side-btn").forEach((a) => a.addEventListener("click", (e) => {
-      if (a.getAttribute("href") === "#") e.preventDefault();
-      if (a.getAttribute("href") === "#" && a.title === "Dashboard") window.scrollTo({ top: 0, behavior: "smooth" });
+      if (a.getAttribute("href") === "#") {
+        e.preventDefault();
+        if (a.title === "Dashboard") window.scrollTo({ top: 0, behavior: "smooth" });
+      }
       $$(".side-nav .side-btn").forEach((x) => x.classList.toggle("active", x === a));
     }));
   }
 
   /* ---------------- Init ---------------- */
-  function init() {
-    hydrate();
+  function renderAll() {
+    M = metrics();
     renderHeader();
     renderOverview();
     renderPosition();
     renderProducts();
     renderSites();
-    renderLegend();
     renderChart();
+  }
+
+  function init() {
+    hydrate();
+    $("#ruleNote").textContent =
+      `Suggestions price ₹${RULES.undercut} below the cheapest in-stock competitor, never below a ${RULES.marginFloor}% margin.`;
+    filterOptions();
+    renderLegend();
+    renderAll();
     bindProducts();
     bindSites();
     bindChart();
