@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Price Competition Dashboard</title>
+  <meta name="description" content="Track how your product prices compare with amazon.in, croma.com and flipkart.com." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <button class="side-btn" id="sidebarToggle" title="Toggle sidebar" aria-label="Toggle sidebar" data-icon="panel"></button>
+      <div class="side-sep"></div>
+      <nav class="side-nav">
+        <a href="#" class="side-btn active" title="Dashboard" aria-label="Dashboard" data-icon="grid"></a>
+        <a href="#history" class="side-btn" title="Reports" aria-label="Reports" data-icon="chart"></a>
+        <a href="#sites" class="side-btn" title="Sites" aria-label="Sites" data-icon="table"></a>
+        <a href="#" class="side-btn" title="Settings" aria-label="Settings" data-icon="settings"></a>
+      </nav>
+      <div class="side-bottom">
+        <div class="side-sep"></div>
+        <button class="side-btn" title="Log out" aria-label="Log out" data-icon="logout"></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="container">
+        <!-- Header -->
+        <header class="page-header">
+          <div>
+            <h1 id="userName"></h1>
+            <p class="meta" id="headerMeta"></p>
+          </div>
+          <p class="updated" id="lastUpdated"></p>
+        </header>
+
+        <!-- Overview -->
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Overview</h2>
+              <p class="sub">Price changes, stock and index this week</p>
+            </div>
+          </div>
+          <div class="overview-grid" id="overview"></div>
+        </section>
+
+        <!-- Price position -->
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Price position</h2>
+              <p class="sub" id="positionSub"></p>
+            </div>
+          </div>
+          <div class="panel position" id="position"></div>
+        </section>
+
+        <!-- Products -->
+        <section class="section" id="products">
+          <div class="section-head">
+            <div>
+              <h2>Products <span class="count" id="productCount"></span></h2>
+              <p class="sub">Your tracked products and what to do next</p>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <div class="tabs" role="tablist">
+              <button class="tab active" data-view="cards" role="tab"><span data-icon="grid"></span>Cards</button>
+              <button class="tab" data-view="list" role="tab"><span data-icon="list"></span>List</button>
+            </div>
+            <div class="toolbar-right">
+              <label class="search">
+                <span data-icon="search"></span>
+                <input type="search" id="productSearch" placeholder="Search products" />
+              </label>
+              <label class="select">
+                <span class="select-label">Sort:</span>
+                <select id="productSort">
+                  <option value="gap">Biggest price gap</option>
+                  <option value="rank">Rank</option>
+                  <option value="name">Name</option>
+                  <option value="priceAsc">Price: low to high</option>
+                  <option value="priceDesc">Price: high to low</option>
+                  <option value="margin">Margin</option>
+                </select>
+                <span data-icon="chevronDown"></span>
+              </label>
+            </div>
+          </div>
+
+          <div id="productView"></div>
+
+          <div class="products-foot">
+            <p class="muted" id="productShowing"></p>
+            <button class="btn" id="toggleAll"></button>
+          </div>
+        </section>
+
+        <!-- Sites -->
+        <section class="section" id="sites">
+          <div class="section-head">
+            <div>
+              <h2>Sites <span class="count" id="siteCount"></span></h2>
+              <p class="sub">How much of your catalogue each site lists</p>
+            </div>
+          </div>
+          <div class="panel table-panel">
+            <div class="table-top">
+              <div class="stats" id="siteStats"></div>
+              <label class="search small">
+                <span data-icon="search"></span>
+                <input type="search" id="siteSearch" placeholder="Search sites" />
+              </label>
+            </div>
+            <table class="table sites-table">
+              <thead>
+                <tr>
+                  <th><button class="th-sort" id="siteSortBtn">Site <span id="siteSortIcon"></span></button></th>
+                  <th>Products matched</th>
+                  <th class="hide-sm"></th>
+                  <th class="num">Price changes this week</th>
+                  <th class="num">Index</th>
+                </tr>
+              </thead>
+              <tbody id="siteRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Historical index -->
+        <section class="section" id="history">
+          <div class="section-head">
+            <div>
+              <h2>Historical index <span class="info" data-icon="info" title="Your average price divided by the average competitor price, × 100"></span></h2>
+              <p class="sub">100 = same as the average competitor price</p>
+            </div>
+          </div>
+          <div class="panel chart-panel">
+            <div class="chart-top">
+              <div class="legend" id="legend"></div>
+              <div class="chart-controls">
+                <div class="segmented" id="rangeSwitch">
+                  <button data-range="7" class="active">7 days</button>
+                  <button data-range="30">30 days</button>
+                  <button data-range="60">2 months</button>
+                </div>
+                <button class="btn ghost" id="customDates"><span data-icon="calendar"></span>Custom dates</button>
+              </div>
+            </div>
+            <div class="chart-wrap" id="chartWrap">
+              <svg id="chart" role="img" aria-label="Historical index by site"></svg>
+              <div class="tooltip" id="tooltip" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <footer class="footer">
+          © 2026 [Product] <span>·</span> v1.2 <span>·</span>
+          <a href="#">Help</a> <span>·</span> <a href="#">Privacy</a> <span>·</span> <a href="#">Terms</a>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="js/icons.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
