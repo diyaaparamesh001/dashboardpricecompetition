@@ -70,7 +70,10 @@
     // One rule for every product: undercut the cheapest in-stock competitor,
     // but never go below the margin floor.
     let suggestion = null;
-    if (live.length) {
+    if (!p.inStock) {
+      // A price change can't win sales while you have nothing to sell.
+      suggestion = { hold: true, restock: true, reason: "Out of stock in your store. Restock before changing the price." };
+    } else if (live.length) {
       const cheapest = Math.min(...live.map((c) => c.price));
       const target = roundDown9(cheapest - RULES.undercut - myFee);
       const floorPrice = roundUp9(p.cost / (1 - RULES.marginFloor / 100));
@@ -341,7 +344,9 @@
     const s = a.suggestion;
     if (!s) return `<span class="muted">No in-stock competitors</span>`;
     if (s.hold) {
-      return `<span class="hold" title="${esc(s.reason)}">${icon("check")}Hold price</span>`;
+      return s.restock
+        ? `<span class="hold warn" title="${esc(s.reason)}">${icon("package")}Restock first</span>`
+        : `<span class="hold" title="${esc(s.reason)}">${icon("check")}Hold price</span>`;
     }
     const delta = s.margin - a.margin;
     const marginNote = `<span class="margin-note ${s.capped ? "warn" : ""}" title="${s.capped ? `Limited by the ${RULES.marginFloor}% margin floor` : ""}">
