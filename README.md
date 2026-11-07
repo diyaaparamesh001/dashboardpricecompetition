@@ -24,6 +24,14 @@ To publish it, enable **GitHub Pages** for the `main` branch, root folder
 - **Products**: cards or a list, with search, sorting and starring. Each product shows
   a price ladder against competitors, a list of competitor prices, and a one-click
   "Raise to / Lower to" price suggestion. The menu offers Undo and Copy SKU.
+- **Competitor details** (open "Competition" on any card): your store next to every
+  competitor listing, with price, MRP and discount, weekly price change, delivery fee and
+  time, rating and review count. Seller names link to the listing.
+- **Compare on: Price / Price + delivery**: switches every ranking, average, index and
+  suggestion to landed price.
+- **Insights and signals**: a one-line insight on each card (a competitor sale, a cheaper
+  rival with a lower rating or slower delivery, a rival rated higher than you), plus a Signals
+  filter for the same cases.
 - **Sites**: how much of the catalogue each site matches, with search and sorting.
 - **Historical index**: a line chart per site (7 days, 30 days, 2 months), with a toggle
   for each series and tooltips on hover.

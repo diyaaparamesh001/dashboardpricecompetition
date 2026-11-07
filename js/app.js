@@ -21,6 +21,11 @@
   const roundDown9 = (v) => Math.floor((v + 1) / 10) * 10 - 1;
   const roundUp9 = (v) => Math.ceil((v + 1) / 10) * 10 - 1;
   const marginAt = (price, cost) => ((price - cost) / price) * 100;
+  const feeOf = (d) => (state.landed && d ? d.fee : 0);
+  const discountOf = (c) => (c.mrp && c.mrp > c.listPrice ? Math.round((1 - c.listPrice / c.mrp) * 100) : 0);
+  const deliveryText = (d) => !d ? "—" : `${d.fee ? inr(d.fee) : "free"} · ${d.days === 1 ? "1 day" : d.days + " days"}`;
+  const compact = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k" : String(n);
+  const productUrl = (site, p) => (site.searchUrl ? site.searchUrl + encodeURIComponent(p.name) : "#");
 
   // Diverging scale: green = below market, neutral = at market, warm = above market.
   const POSITIONS = [
@@ -34,17 +39,20 @@
 
   /* ---------------- Per-product analysis ---------------- */
   function analyze(p) {
-    const listings = Object.entries(p.competitors).map(([site, c]) => ({ site, ...c }));
+    // In "Price + delivery" mode every comparison uses landed price (price + delivery fee).
+    const myFee = feeOf(p.delivery);
+    const myPrice = p.price + myFee;
+    const listings = Object.entries(p.competitors).map(([site, c]) => ({ site, ...c, listPrice: c.price, price: c.price + feeOf(c.delivery) }));
     const live = listings.filter((c) => c.inStock);
     const ladder = live.map((c) => ({ ...c, you: false }))
-      .concat([{ site: "you", price: p.price, you: true }])
+      .concat([{ site: "you", price: myPrice, you: true }])
       .sort((a, b) => a.price - b.price || (a.you ? -1 : 1));
     const rank = ladder.findIndex((r) => r.you) + 1;
     const total = ladder.length;
     const avg = mean(live.map((c) => c.price));
-    const gapPct = live.length ? ((p.price - avg) / avg) * 100 : 0;
-    const index = live.length ? (p.price / avg) * 100 : 100;
-    const cheaperSites = live.filter((c) => c.price < p.price).length;
+    const gapPct = live.length ? ((myPrice - avg) / avg) * 100 : 0;
+    const index = live.length ? (myPrice / avg) * 100 : 100;
+    const cheaperSites = live.filter((c) => c.price < myPrice).length;
     const margin = marginAt(p.price, p.cost);
 
     let position;
@@ -64,7 +72,7 @@
     let suggestion = null;
     if (live.length) {
       const cheapest = Math.min(...live.map((c) => c.price));
-      const target = roundDown9(cheapest - RULES.undercut);
+      const target = roundDown9(cheapest - RULES.undercut - myFee);
       const floorPrice = roundUp9(p.cost / (1 - RULES.marginFloor / 100));
       let price = target, capped = false;
       if (target < floorPrice) { price = floorPrice; capped = true; }
@@ -78,7 +86,27 @@
       }
     }
 
-    return { listings, live, ladder, rank, total, avg, gapPct, index, position, rankNote, margin, suggestion };
+    return { listings, live, ladder, rank, total, avg, gapPct, index, position, rankNote, margin, suggestion, myPrice, insight: insightFor(p, live) };
+  }
+
+  // One short, decision-relevant observation per product, using discount, rating and delivery data.
+  function insightFor(p, live) {
+    if (!live.length) return null;
+    const cheapest = live.slice().sort((a, b) => a.price - b.price)[0];
+    const s = siteById[cheapest.site].name;
+    if (cheapest.listPrice < p.price) {
+      const off = discountOf(cheapest);
+      if (cheapest.prev > cheapest.listPrice && off >= 25)
+        return { tone: "warn", text: `${s} cut its price this week and is ${off}% off MRP. This may be a temporary sale.` };
+      if (p.rating != null && cheapest.rating != null && p.rating - cheapest.rating >= 0.3)
+        return { tone: "good", text: `${s} is cheaper but rated ${cheapest.rating.toFixed(1)}★ vs your ${p.rating.toFixed(1)}★. Your rating may justify a small premium.` };
+      if (p.delivery && cheapest.delivery && (cheapest.delivery.fee > p.delivery.fee || cheapest.delivery.days - p.delivery.days >= 2))
+        return { tone: "good", text: `${s} is cheaper but ${deliveryText(cheapest.delivery)} vs your ${deliveryText(p.delivery)}.${state.landed ? "" : " Compare on price + delivery."}` };
+    }
+    const top = live.filter((c) => c.rating != null).sort((a, b) => b.rating - a.rating)[0];
+    if (top && p.rating != null && top.rating - p.rating >= 0.3)
+      return { tone: "warn", text: `${siteById[top.site].name} is rated ${top.rating.toFixed(1)}★ vs your ${p.rating.toFixed(1)}★. Price alone may not win this one.` };
+    return null;
   }
 
   /* ---------------- Portfolio-level metrics ---------------- */
@@ -94,7 +122,7 @@
         listed: rows.length,
         outOfStock: rows.length - inStock.length,
         changes: rows.filter((r) => r.c.prev != null && r.c.prev !== r.c.price).length,
-        index: inStock.length ? mean(inStock.map((r) => (r.p.price / r.c.price) * 100)) : 100,
+        index: inStock.length ? mean(inStock.map((r) => ((r.p.price + feeOf(r.p.delivery)) / (r.c.price + feeOf(r.c.delivery))) * 100)) : 100,
       };
     });
 
@@ -138,6 +166,8 @@
     siteSortAsc: true,
     range: 7,
     hiddenSeries: new Set(),
+    landed: false,
+    signal: "",
   };
   const CARD_LIMIT = 4;
   let M = null; // current metrics
@@ -287,6 +317,13 @@
     if (state.category) list = list.filter(({ p }) => p.category === state.category);
     if (state.position) list = list.filter(({ a }) => a.position === state.position);
     if (state.oos) list = list.filter(({ p }) => !p.inStock);
+    const SIGNALS = {
+      sale: ({ a }) => a.listings.some((c) => discountOf(c) >= 25 && c.prev > c.listPrice),
+      rivalOos: ({ a }) => a.listings.some((c) => !c.inStock),
+      ratedHigher: ({ p, a }) => a.live.some((c) => c.rating - p.rating >= 0.3),
+      slowerRival: ({ p, a }) => a.live.some((c) => c.listPrice < p.price && c.delivery && (c.delivery.fee > 0 || c.delivery.days - p.delivery.days >= 2)),
+    };
+    if (state.signal) list = list.filter(SIGNALS[state.signal]);
     const sorters = {
       gap: (x, y) => Math.abs(y.a.gapPct) - Math.abs(x.a.gapPct),
       rank: (x, y) => x.a.rank - y.a.rank || x.p.name.localeCompare(y.p.name),
@@ -337,7 +374,7 @@
   function productCard({ p, a }) {
     // Show every listing on the ladder; out-of-stock ones are hollow and unranked.
     const points = a.listings.map((c) => ({ ...c, you: false }))
-      .concat([{ site: "you", price: p.price, you: true, inStock: p.inStock }])
+      .concat([{ site: "you", price: a.myPrice, you: true, inStock: p.inStock }])
       .sort((x, y) => x.price - y.price || (x.you ? -1 : 1));
     const pos = ladderPositions(points);
     const rungs = points.map((r, i) => {
@@ -371,26 +408,55 @@
         </div>
         <p class="p-rank"><span class="pill"><i style="background:${pos0.color}"></i>${pos0.label}</span>
           <span><b>#${a.rank} of ${a.total}</b> · ${a.rankNote} · <span class="${gapCls}">${signed(a.gapPct)}% vs avg</span></span></p>
+        ${a.insight ? `<p class="insight ${a.insight.tone}">${icon("info")}<span>${esc(a.insight.text)}</span></p>` : ""}
         <div class="ladder"><div class="ladder-track"></div>${rungs}</div>
+        ${state.landed ? `<p class="ladder-note">Prices include delivery</p>` : ""}
         <div class="p-foot">
           <button class="comp-toggle" data-action="expand" data-id="${p.id}" aria-expanded="${expanded}">
             Competition (${a.live.length})${a.listings.length > a.live.length ? ` · ${a.listings.length - a.live.length} out of stock` : ""} ${icon(expanded ? "chevronUp" : "chevronDown")}</button>
           ${actionBlock(p, a)}
         </div>
-        ${expanded ? competitorList(a) : ""}
+        ${expanded ? competitorList(p, a) : ""}
       </article>`;
   }
 
   const initials = (name) => name.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
 
-  function competitorList(a) {
-    return `<div class="comp-list">${a.listings.slice().sort((x, y) => x.price - y.price).map((c) => {
-      const s = siteById[c.site];
-      const move = c.prev != null && c.prev !== c.price
-        ? `<span class="${c.price > c.prev ? "warn" : "good"}">${c.price > c.prev ? "+" : "−"}${inr(Math.abs(c.price - c.prev))} this week</span>` : `<span class="muted">no change</span>`;
-      return `<div><span class="site-name"><i class="swatch" style="background:${s.color}"></i>${esc(s.name)}${c.inStock ? "" : ` <span class="tag">Out of stock</span>`}</span>
-        ${move}<b>${inr(c.price)}</b></div>`;
-    }).join("")}</div>`;
+  function stars(r) {
+    return r == null ? `<span class="muted">—</span>` : `<span class="rating">${icon("star")}${r.toFixed(1)}</span>`;
+  }
+
+  // Side-by-side comparison: your store first, then every competitor listing.
+  function competitorList(p, a) {
+    const best = (key, dir) => {
+      const vals = a.live.map(key).concat([key({ ...p, listPrice: p.price, you: true })]).filter((v) => v != null);
+      return dir > 0 ? Math.max(...vals) : Math.min(...vals);
+    };
+    const bestRating = best((c) => c.rating, 1);
+    const fastest = best((c) => c.delivery && c.delivery.days, -1);
+    const row = (o) => {
+      const off = o.you ? 0 : discountOf(o);
+      const move = !o.you && o.prev != null && o.prev !== o.listPrice
+        ? `<span class="${o.listPrice > o.prev ? "warn" : "good"}">${o.listPrice > o.prev ? "+" : "−"}${inr(Math.abs(o.listPrice - o.prev))} this week</span>` : "";
+      const seller = o.you
+        ? `<span class="seller you"><i class="swatch you"></i>Your store</span>`
+        : `<a class="seller" href="${esc(productUrl(siteById[o.site], p))}" target="_blank" rel="noopener" title="Open on ${esc(siteById[o.site].name)}">
+             <i class="swatch" style="background:${siteById[o.site].color}"></i>${esc(siteById[o.site].name)}${icon("external")}</a>`;
+      return `<tr class="${o.you ? "me" : ""}${o.inStock ? "" : " oos"}">
+        <td>${seller}${o.inStock ? "" : `<span class="tag">Out of stock</span>`}</td>
+        <td class="num"><b>${inr(o.listPrice)}</b>
+          ${off ? `<span class="mrp"><s>${inr(o.mrp)}</s> <span class="off">−${off}%</span></span>` : ""}
+          ${move ? `<span class="mrp">${move}</span>` : ""}</td>
+        <td>${o.delivery ? `<span>${o.delivery.fee ? inr(o.delivery.fee) : "Free"}</span><span class="sub2${o.delivery.days === fastest ? " best" : ""}">${o.delivery.days === 1 ? "1 day" : o.delivery.days + " days"}</span>` : "—"}</td>
+        <td>${o.rating != null ? `<span class="${o.rating === bestRating ? "best" : ""}">${stars(o.rating)}</span><span class="sub2">${compact(o.reviews)} reviews</span>` : "—"}</td>
+      </tr>`;
+    };
+    const me = { you: true, listPrice: p.price, rating: p.rating, reviews: p.reviews, delivery: p.delivery, inStock: p.inStock };
+    const rows = a.listings.slice().sort((x, y) => (y.inStock - x.inStock) || x.listPrice - y.listPrice);
+    return `<div class="comp-wrap"><table class="comp-table">
+      <thead><tr><th>Seller</th><th class="num">Price</th><th>Delivery</th><th>Rating</th></tr></thead>
+      <tbody>${row(me)}${rows.map(row).join("")}</tbody></table>
+      <p class="comp-note">Seller names open the listing. Highlighted: fastest delivery and best rating.</p></div>`;
   }
 
   function productRow({ p, a }) {
@@ -398,11 +464,12 @@
     return `
       <tr>
         <td><div class="prod"><div class="thumb">${esc(initials(p.name))}</div><div><b>${esc(p.name)}</b><small>SKU ${p.id} · ${esc(p.brand)}${p.inStock ? "" : " · out of stock"}</small></div></div></td>
-        <td class="num"><b>${inr(p.price)}</b></td>
+        <td class="num"><b>${inr(a.myPrice)}</b></td>
         <td>#${a.rank} of ${a.total}</td>
         <td><span class="pill"><i style="background:${pos.color}"></i>${pos.label}</span></td>
         <td class="num">${a.live.length ? inr(Math.min(...a.live.map((c) => c.price))) : "—"}</td>
         <td class="num">${a.live.length ? inr(a.avg) : "—"}</td>
+        <td>${stars(p.rating)}<span class="sub2">best rival ${a.live.length ? Math.max(...a.live.map((c) => c.rating || 0)).toFixed(1) : "—"}</span></td>
         <td class="num">${actionBlock(p, a, true)}</td>
       </tr>`;
   }
@@ -427,7 +494,7 @@
       view.innerHTML = `
         <div class="panel list-panel"><table class="table list-table">
           <thead><tr><th>Product</th><th class="num">Your price</th><th>Rank</th><th>Position</th>
-          <th class="num">Cheapest rival</th><th class="num">Avg. rival</th><th class="num">Suggestion</th></tr></thead>
+          <th class="num">Cheapest rival</th><th class="num">Avg. rival</th><th>Rating</th><th class="num">Suggestion</th></tr></thead>
           <tbody>${shown.map(productRow).join("")}</tbody></table></div>`;
     }
 
@@ -447,7 +514,7 @@
     menu.className = "panel menu";
     const item = (act, label, disabled) => `<button data-menu="${act}" ${disabled ? "disabled" : ""}>${label}</button>`;
     menu.innerHTML =
-      item("competitors", state.expanded.has(p.id) ? "Hide competitor prices" : "Show competitor prices") +
+      item("competitors", state.expanded.has(p.id) ? "Hide competitor details" : "Show competitor details") +
       item("copy", "Copy SKU") +
       item("undo", "Undo price change", !changed);
     document.body.appendChild(menu);
@@ -487,6 +554,15 @@
     $("#productSort").addEventListener("change", (e) => { state.sort = e.target.value; renderProducts(); });
     $("#brandFilter").addEventListener("change", (e) => { state.brand = e.target.value; renderProducts(); });
     $("#categoryFilter").addEventListener("change", (e) => { state.category = e.target.value; renderProducts(); });
+    $("#signalFilter").addEventListener("change", (e) => { state.signal = e.target.value; renderProducts(); });
+    $("#basisSwitch").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-basis]");
+      if (!b) return;
+      $$("#basisSwitch button").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
+      state.landed = b.dataset.basis === "landed";
+      setRuleNote();
+      renderAll();
+    });
     $("#toggleAll").addEventListener("click", () => {
       state.showAll = !state.showAll;
       renderProducts();
@@ -784,6 +860,11 @@
   }
 
   /* ---------------- Init ---------------- */
+  function setRuleNote() {
+    $("#ruleNote").textContent =
+      `Suggestions price ₹${RULES.undercut} below the cheapest in-stock competitor${state.landed ? " (price + delivery)" : ""}, never below a ${RULES.marginFloor}% margin.`;
+  }
+
   function renderAll() {
     M = metrics();
     renderHeader();
@@ -796,8 +877,7 @@
 
   function init() {
     hydrate();
-    $("#ruleNote").textContent =
-      `Suggestions price ₹${RULES.undercut} below the cheapest in-stock competitor, never below a ${RULES.marginFloor}% margin.`;
+    setRuleNote();
     filterOptions();
     renderLegend();
     renderAll();

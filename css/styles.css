@@ -350,6 +350,51 @@ h3 { font-size: var(--fs-h3); font-weight: 600; line-height: 1.35; }
 .comp-list .site-name { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
 .comp-list .swatch { width: 8px; height: 8px; border-radius: 50%; }
 
+/* Insight line */
+.insight {
+  margin-top: 12px; display: flex; gap: 8px; align-items: flex-start;
+  font-size: var(--fs-small); color: var(--text-2);
+  padding: 8px 10px; border-radius: 7px; background: #222; border-left: 2px solid var(--muted);
+}
+.insight .icon { width: 14px; height: 14px; margin-top: 2px; color: var(--muted); }
+.insight.good { border-left-color: var(--good); }
+.insight.good .icon { color: var(--good); }
+.insight.warn { border-left-color: var(--warn); }
+.insight.warn .icon { color: var(--warn); }
+.ladder-note { margin-top: 2px; font-size: var(--fs-caption); color: var(--muted); text-align: right; }
+
+/* Competitor comparison table */
+.comp-wrap { margin-top: 14px; overflow-x: auto; }
+.comp-table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
+.comp-table th { text-align: left; font-weight: 500; color: var(--muted); font-size: var(--fs-caption); padding: 0 10px 6px 0; border-bottom: 1px solid var(--border-soft); }
+.comp-table td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; font-variant-numeric: tabular-nums; }
+.comp-table tr:last-child td { border-bottom: 0; }
+.comp-table .num { text-align: right; padding-right: 14px; }
+.comp-table td b { font-weight: 600; }
+.comp-table tr.me td { background: #222; }
+.comp-table tr.me td:first-child { border-radius: 6px 0 0 6px; padding-left: 8px; }
+.comp-table tr.me td:last-child { border-radius: 0 6px 6px 0; }
+.comp-table tr.oos td { opacity: .6; }
+.seller { display: inline-flex; align-items: center; gap: 7px; color: var(--text); white-space: nowrap; }
+a.seller:hover { text-decoration: underline; text-underline-offset: 3px; }
+.seller .icon { width: 11px; height: 11px; color: var(--muted); }
+.seller.you { font-weight: 600; }
+.swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.swatch.you { background: var(--white); }
+.comp-table .tag { margin-top: 3px; display: table; }
+.mrp { display: block; font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
+.mrp s { color: var(--muted); }
+.off { color: var(--text-2); font-weight: 500; }
+.sub2 { display: block; font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
+.rating { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.rating .icon { width: 11px; height: 11px; color: var(--mustard); fill: var(--mustard); }
+.best { font-weight: 600; color: var(--text); }
+.best::after { content: " ●"; font-size: 7px; vertical-align: middle; color: var(--good); }
+.comp-note { margin-top: 8px; font-size: var(--fs-caption); color: var(--muted); }
+
+/* Compare-on switch */
+.basis { display: flex; align-items: center; gap: 10px; font-size: var(--fs-small); }
+
 .products-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: var(--fs-small); }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 
@@ -401,7 +446,10 @@ h3 { font-size: var(--fs-h3); font-weight: 600; line-height: 1.35; }
 .list-panel { overflow-x: auto; }
 .list-table td { height: 62px; white-space: nowrap; }
 .list-table td:first-child { white-space: normal; }
-.list-table .prod { display: flex; align-items: center; gap: 12px; min-width: 240px; }
+.list-table .prod { display: flex; align-items: center; gap: 12px; min-width: 200px; }
+.list-table th, .list-table td { padding-left: 12px; padding-right: 12px; }
+.list-table th:first-child, .list-table td:first-child { padding-left: 18px; }
+.list-table th:last-child, .list-table td:last-child { padding-right: 18px; }
 .list-table .prod .thumb { width: 34px; height: 34px; border-radius: 8px; font-size: var(--fs-caption); }
 .list-table .prod b { font-weight: 600; display: block; }
 .list-table .prod small { color: var(--muted); font-size: var(--fs-small); }
@@ -501,4 +549,5 @@ h3 { font-size: var(--fs-h3); font-weight: 600; line-height: 1.35; }
   .ladder { margin: 18px 20px 0; }
   .rung { width: 60px; }
   .action { width: 100%; justify-content: space-between; }
+  .section-head { flex-direction: column; align-items: flex-start; gap: 12px; }
 }

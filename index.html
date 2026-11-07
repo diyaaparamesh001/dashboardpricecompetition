@@ -69,6 +69,13 @@
               <p class="sub">Your tracked products and what to do next</p>
               <p class="rule" id="ruleNote"></p>
             </div>
+            <div class="basis">
+              <span class="muted">Compare on</span>
+              <div class="segmented" id="basisSwitch">
+                <button data-basis="price" class="active" aria-pressed="true">Price</button>
+                <button data-basis="landed" aria-pressed="false">Price + delivery</button>
+              </div>
+            </div>
           </div>
 
           <div class="toolbar">
@@ -79,6 +86,13 @@
             <div class="toolbar-right">
               <label class="select"><select id="brandFilter" aria-label="Filter by brand"></select><span data-icon="chevronDown"></span></label>
               <label class="select"><select id="categoryFilter" aria-label="Filter by category"></select><span data-icon="chevronDown"></span></label>
+              <label class="select"><select id="signalFilter" aria-label="Filter by signal">
+                <option value="">All signals</option>
+                <option value="sale">Competitor on sale</option>
+                <option value="rivalOos">Competitor out of stock</option>
+                <option value="ratedHigher">Competitor rated higher</option>
+                <option value="slowerRival">Cheaper rival, worse delivery</option>
+              </select><span data-icon="chevronDown"></span></label>
               <label class="search">
                 <span data-icon="search"></span>
                 <input type="search" id="productSearch" placeholder="Search products" />

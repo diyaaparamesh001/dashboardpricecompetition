@@ -25,6 +25,7 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
     chevronUp: '<path d="M6 15l6-6 6 6"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    external: '<path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   };
 
   function icon(name, size) {
